@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
-
+st.set_page_config(layout="wide")
 # Nastavení hesla
 APP_PASSWORD = "5p3n9pg"
 
