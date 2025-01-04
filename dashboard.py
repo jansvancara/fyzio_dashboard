@@ -1,12 +1,15 @@
 import streamlit as st
 import pandas as pd
+from scipy.stats import norm
+import numpy as np
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
+
 st.set_page_config(layout="wide")
+
 # Nastavení hesla
 APP_PASSWORD = "5p3n9pg"
 
-# Funkce pro kontrolu hesla
 def check_password():
     """Funkce pro ověření hesla."""
     st.sidebar.header("Přihlášení")
@@ -17,10 +20,21 @@ def check_password():
         st.sidebar.error("Nesprávné heslo.")
     return False
 
-# Pokud je heslo správné, zobrazí se aplikace
+def calculate_95ci(series):
+    """Vypočítá 95% interval spolehlivosti pro daný pandas Series."""
+    n = series.count()
+    mean = series.mean()
+    std = series.std()
+    if n > 1:
+        ci = norm.ppf(0.975) * std / np.sqrt(n)
+        lower_bound = mean - ci
+        upper_bound = mean + ci
+        return mean, lower_bound, upper_bound
+    else:
+        return mean, None, None
+
 if check_password():
     data = pd.read_csv("https://drive.google.com/uc?id=1eML31iQWPXUyBehx9B25imjpbc3j3E-Y", delimiter=";")
-
 
     # Seznam rolí a zařízení
     roles = [
@@ -35,24 +49,72 @@ if check_password():
     selected_roles = st.sidebar.multiselect("Vyberte roli v týmu", roles)
     selected_facilities = st.sidebar.multiselect("Vyberte zařízení", data[facility_column].unique())
 
-    # Aplikování filtru
+    # Filtr dat
     filtered_data = data.copy()
+
+    # Filtrace podle rolí
     if selected_roles:
-        role_filters = (filtered_data[role_columns] == "Checked").any(axis=1)
-        filtered_data = filtered_data[role_filters]
+        selected_role_columns = [
+            f"1. Jakou roli v paliativním týmu zastáváte? (choice={role})" for role in selected_roles
+        ]
+        role_filter = filtered_data[selected_role_columns].eq("Checked").any(axis=1)
+        filtered_data = filtered_data[role_filter]
+
+    # Filtrace podle zařízení
     if selected_facilities:
         filtered_data = filtered_data[filtered_data[facility_column].isin(selected_facilities)]
 
-    # Filtrování dle vybraných rolí
-    if selected_roles:
-        # Seznam sloupců odpovídajících vybraným rolím
-        selected_role_columns = [
-            f"1. Jakou roli v paliativním týmu zastáváte? (choice={role})"
-            for role in selected_roles
-        ]
-        # Kontrola, zda jsou tyto sloupce "Checked"
-        role_filters = filtered_data[selected_role_columns].eq("Checked").any(axis=1)
-        filtered_data = filtered_data[role_filters]
+    # Rozdělení na "Vybráno" a "Ostatní"
+    data["Vybráno"] = data.index.isin(filtered_data.index)
+    selected_data = data[data["Vybráno"]]
+    other_data = data[~data["Vybráno"]]
+
+    # Funkce pro výpočet tabulky
+    def calculate_summary_table(columns, selected_data, other_data):
+        """Vytvoří tabulku s průměrnými hodnotami, 95% CI a počtem případů (n)."""
+        summary = pd.DataFrame({
+            "Možnosti/Rizika": columns,
+            "Vybráno (průměr ± 95% CI, n)": [
+                f"{round(mean, 2)} ({round(lower, 2)} - {round(upper, 2)}) n = {n}"
+                if lower is not None and upper is not None else f"{round(mean, 2)} (N/A - N/A) n = {n}"
+                for mean, lower, upper, n in (
+                    (calculate_95ci(selected_data[col]) + (selected_data[col].count(),)) for col in columns
+                )
+            ],
+            "Ostatní (průměr ± 95% CI, n)": [
+                f"{round(mean, 2)} ({round(lower, 2)} - {round(upper, 2)}) n = {n}"
+                if lower is not None and upper is not None else f"{round(mean, 2)} (N/A - N/A) n = {n}"
+                for mean, lower, upper, n in (
+                    (calculate_95ci(other_data[col]) + (other_data[col].count(),)) for col in columns
+                )
+            ],
+        })
+        return summary
+
+    # Definice sloupců
+    option_columns = [
+        "Zlepšuje sebeobsluhu pacienta", "Pomáhá snižovat pacientovu bolest", "Snižuje pacientovu dušnost",
+        "Pomáhá působit preventivně proti vzniku komplikací péče (pády, kožní defekty, vznik kontraktur, etc.)",
+        "Působí preventivně proti vzniku dalších komorbidit vyplývajících z onemocnění pacienta",
+        "Pomáhá pacientovi s prognostickým uvědoměním", "Zlepšuje psychický stav pacienta",
+        "Při přeložení pacienta do jiného zařízení pomáhá s předáním informací o stavu a potřebách pacienta",
+        "Pomáhá pacientovi a rodině nastavit alternativní způsoby komunikace v případě zhoršení schopnosti mluvit",
+        "Pomáhá pacientovi s relaxací, zklidněním",
+        "Pomáhá pacientovi pomocí nastavených aktivit v průběhu dne s orientací v čase",
+        "Pomáhá pacientovi po spirituální stránce",
+        "Může edukovat ostatní členy paliativních týmů v možnostech zapojení rehabilitace do PP"
+    ]
+    risk_columns = [
+        "Vznik falešné naděje u paliativních pacientů", "Zvýšení únavy pacienta", "Pozátěžové zhoršení stavu pacienta",
+        "Nedostatečná znalost komunikace v paliativní péči", "Nízký efekt fyzioterapeutické intervence u paliativních pacientů ",
+        "Vznik (zvýšení rizika)  zranění při rehabilitaci u paliativních pacientů",
+        "Účast další osoby se setká s nevolí pacienta či pečujících"
+    ]
+
+    # Výpočet tabulek
+    options_table = calculate_summary_table(option_columns, selected_data, other_data)
+    risks_table = calculate_summary_table(risk_columns, selected_data, other_data)
+
 
 
     # Funkce pro vytvoření grafu
@@ -159,5 +221,10 @@ if check_password():
     st.subheader("Možnosti")
     st.plotly_chart(create_stacked_bar_chart(filtered_data, option_columns, "Možnosti"))
 
+    st.subheader("Možnosti")
+    st.table(options_table)
+
     st.subheader("Rizika")
     st.plotly_chart(create_stacked_bar_chart(filtered_data, risk_columns, "Rizika"))
+    st.subheader("Rizika")
+    st.table(risks_table)
